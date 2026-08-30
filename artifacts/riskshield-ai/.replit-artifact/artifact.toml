@@ -1,0 +1,28 @@
+kind = "web"
+previewPath = "/"
+title = "RiskShield AI"
+description = "An AI-powered payment risk intelligence and abuse investigation command center for payment operations teams. Combines ML fraud risk, behavioral anomaly detection, graph-based abuse-ring intelligence, explainable decisions, what-if simulation, and an auditable analyst workflow."
+version = "1.0.0"
+id = "artifacts/riskshield-ai"
+router = "path"
+
+[[services]]
+name = "web"
+paths = [ "/" ]
+localPort = 22379
+
+[services.development]
+run = "pnpm --filter @workspace/riskshield-ai run dev"
+
+[services.production]
+build = [ "pnpm", "--filter", "@workspace/riskshield-ai", "run", "build" ]
+serve = "static"
+publicDir = "artifacts/riskshield-ai/dist/public"
+
+[[services.production.rewrites]]
+from = "/*"
+to = "/index.html"
+
+[services.env]
+PORT = "22379"
+BASE_PATH = "/"

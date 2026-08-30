@@ -1,0 +1,255 @@
+import { type ReactNode, useMemo, useState } from 'react';
+import { QueryClient, QueryClientProvider, useQueryClient } from '@tanstack/react-query';
+import { Link, Route, Switch, useLocation, useParams, Router as WouterRouter } from 'wouter';
+import {
+  Activity, AlertTriangle, ArrowDownRight, ArrowUpRight, BarChart3, Bell, BookOpen,
+  BrainCircuit, ChevronRight, CircleHelp, Database, Filter, Gauge, Menu, Network, Search,
+  ShieldCheck, SlidersHorizontal, Sparkles, Target, Zap,
+  X,
+} from 'lucide-react';
+import {
+  getGetAuditQueryKey, getGetRingQueryKey,
+  getGetTransactionQueryKey, useAnalyzeRisk, useGetAlerts, useGetAudit,
+  useGetDashboardSummary, useGetModelMetrics, useGetRing, useGetRings,
+  useGetTransaction, useGetTransactions, useRecordAnalystAction, useSimulateRisk,
+} from '@workspace/api-client-react';
+import {
+  type AbuseRing, type Alert, type AuditEvent, type Recommendation, type RiskAnalysis, type SimulationResult, type Transaction,
+  GetTransactionsRiskLevel, GetTransactionsStatus, RiskLevel,
+} from '@workspace/api-client-react';
+import { ErrorBoundary } from '@/components/error-boundary';
+import { Toaster } from '@/components/ui/toaster';
+import { TooltipProvider } from '@/components/ui/tooltip';
+import NotFound from '@/pages/not-found';
+
+const queryClient = new QueryClient();
+const nav = [
+  { href: '/', label: 'Command center', icon: Gauge },
+  { href: '/transactions', label: 'Transactions', icon: Activity },
+  { href: '/rings', label: 'Abuse rings', icon: Network },
+  { href: '/simulator', label: 'Risk simulator', icon: SlidersHorizontal },
+  { href: '/model', label: 'Model intelligence', icon: BrainCircuit },
+  { href: '/impact', label: 'Business impact', icon: BarChart3 },
+  { href: '/audit', label: 'Audit trail', icon: BookOpen },
+];
+
+const money = (value?: number, currency = 'INR') =>
+  new Intl.NumberFormat('en-US', { style: 'currency', currency, maximumFractionDigits: 0 }).format(value ?? 0);
+const pct = (value?: number) => `${((value ?? 0) * 100).toFixed(1)}%`;
+const score = (value?: number) => `${Math.round(value ?? 0)}`;
+const when = (value?: string) => value ? new Intl.DateTimeFormat('en-US', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }).format(new Date(value)) : '—';
+const levelClass = (level?: string) => `risk-${(level ?? 'medium').toLowerCase()}`;
+const recommendationLabel = (value?: string) => value ? value[0] + value.slice(1).toLowerCase() : 'Unassigned';
+
+function Surface({ children, className = '', ...props }: { children: ReactNode; className?: string; [key: string]: unknown }) {
+  return <section className={`rounded-2xl border border-[#e1ddd2] bg-[#fbfaf6] ${className}`} {...props}>{children}</section>;
+}
+function SectionHeading({ eyebrow, title, note, action }: { eyebrow?: string; title: string; note?: string; action?: ReactNode }) {
+  return <div className="mb-5 flex items-end justify-between gap-4">
+    <div>
+      {eyebrow && <div className="mono mb-1 text-[10px] uppercase tracking-[.16em] text-[#6b7889]">{eyebrow}</div>}
+      <h2 className="display text-[22px] font-bold text-[#182337]">{title}</h2>
+      {note && <p className="mt-1 text-xs text-[#6b7889]">{note}</p>}
+    </div>
+    {action}
+  </div>;
+}
+function Button({ children, className = '', variant = 'primary', ...props }: { children: ReactNode; className?: string; variant?: 'primary' | 'quiet' | 'outline' | 'danger'; [key: string]: unknown }) {
+  const styles = {
+    primary: 'bg-[#182337] text-[#fbfaf6] hover:bg-[#26354e]',
+    quiet: 'bg-[#edf2df] text-[#31402a] hover:bg-[#e2ebc7]',
+    outline: 'border border-[#d5d6ca] text-[#344056] hover:bg-[#f0efe6]',
+    danger: 'bg-[#d65c50] text-white hover:bg-[#bd4d43]',
+  };
+  return <button className={`inline-flex items-center justify-center gap-2 rounded-lg px-3.5 py-2 text-xs font-semibold transition-colors disabled:cursor-not-allowed disabled:opacity-50 ${styles[variant]} ${className}`} {...props}>{children}</button>;
+}
+function StatusPill({ level, label }: { level?: string; label?: string }) {
+  return <span className={`inline-flex items-center rounded-full px-2 py-1 text-[10px] font-bold uppercase tracking-[.08em] ${levelClass(level)}`}>{label ?? level ?? '—'}</span>;
+}
+function LoadingState({ rows = 4 }: { rows?: number }) {
+  return <div className="space-y-3" data-testid="status-loading">{Array.from({ length: rows }, (_, i) => <div className="skeleton h-12 rounded-lg" key={i} />)}</div>;
+}
+function ErrorState({ onRetry }: { onRetry?: () => void }) {
+  return <div className="flex min-h-40 flex-col items-center justify-center rounded-xl border border-dashed border-[#d8c4b5] bg-[#fff9f3] text-center" data-testid="status-error">
+    <AlertTriangle className="mb-2 h-5 w-5 text-[#d65c50]" /><p className="text-sm font-semibold text-[#5c3e37]">Signal unavailable</p><p className="mt-1 text-xs text-[#8b6b60]">The risk feed did not respond. Try again.</p>
+    {onRetry && <Button className="mt-3" variant="outline" onClick={onRetry} data-testid="button-retry">Retry connection</Button>}
+  </div>;
+}
+function EmptyState({ label = 'No records match this view.' }: { label?: string }) {
+  return <div className="flex min-h-36 flex-col items-center justify-center rounded-xl border border-dashed border-[#d5d6ca] text-center" data-testid="status-empty"><Database className="mb-2 h-5 w-5 text-[#8b98a4]" /><p className="text-sm text-[#6b7889]">{label}</p></div>;
+}
+function Metric({ label, value, detail, accent = 'teal', trend }: { label: string; value: string; detail?: string; accent?: 'teal' | 'lime' | 'coral' | 'amber'; trend?: 'up' | 'down' }) {
+  return <div className="metric-card rounded-2xl p-4" data-testid={`metric-${label.toLowerCase().replaceAll(' ', '-')}`}>
+    <div className="mb-4 flex items-center justify-between"><span className="mono text-[10px] uppercase tracking-[.12em] text-[#718094]">{label}</span><span className={`h-2 w-2 rounded-full ${accent === 'lime' ? 'bg-[#cbe85a]' : accent === 'coral' ? 'bg-[#d65c50]' : accent === 'amber' ? 'bg-[#e8a548]' : 'bg-[#3fa8a3]'}`} /></div>
+    <div className="display text-[29px] font-bold text-[#182337]">{value}</div>
+    <div className="mt-2 flex items-center gap-1 text-xs text-[#6b7889]">{trend && (trend === 'up' ? <ArrowUpRight className="h-3.5 w-3.5 text-[#3fa8a3]" /> : <ArrowDownRight className="h-3.5 w-3.5 text-[#d65c50]" />)}{detail}</div>
+  </div>;
+}
+function Sparkline({ data }: { data: { high: number; critical: number }[] }) {
+  const values = data.length ? data.map((d) => d.high + d.critical) : [5, 7, 4, 8, 6];
+  const max = Math.max(...values, 1); const min = Math.min(...values);
+  const points = values.map((v, i) => `${(i / Math.max(values.length - 1, 1)) * 100},${42 - ((v - min) / Math.max(max - min, 1)) * 32}`).join(' ');
+  return <svg viewBox="0 0 100 48" preserveAspectRatio="none" className="h-36 w-full"><path d="M0 42H100" stroke="#e7e4db" strokeWidth="1" /><polyline points={points} className="chart-line" vectorEffect="non-scaling-stroke" /><circle cx="100" cy={points.split(',').at(-1)?.split(' ')[0] ?? 42} r="1.8" fill="#cbe85a" /></svg>;
+}
+function MiniBar({ value, color = '#3fa8a3' }: { value: number; color?: string }) {
+  return <div className="h-1.5 flex-1 overflow-hidden rounded-full bg-[#e9e9df]"><div className="h-full rounded-full" style={{ width: `${Math.min(value * 100, 100)}%`, background: color }} /></div>;
+}
+
+function Shell({ children }: { children: ReactNode }) {
+  const [location] = useLocation(); const [open, setOpen] = useState(false);
+  const current = nav.find((item) => item.href === location)?.label ?? (location.startsWith('/investigations') ? 'Investigation workspace' : 'Risk operations');
+  return <div className="noise flex min-h-[100dvh] bg-[#f4f0e7] text-[#182337]">
+    <aside className={`fixed inset-y-0 left-0 z-50 flex w-[248px] flex-col bg-[#182337] px-4 py-5 text-[#eef0e2] transition-transform md:static md:translate-x-0 ${open ? 'translate-x-0' : '-translate-x-full'}`}>
+      <div className="flex items-center justify-between px-2">
+        <Link href="/" className="flex items-center gap-2.5" onClick={() => setOpen(false)} data-testid="link-brand">
+          <span className="grid h-8 w-8 place-items-center rounded-lg bg-[#cbe85a] text-[#182337]"><ShieldCheck className="h-4.5 w-4.5" /></span>
+          <span><span className="display block text-[17px] font-extrabold tracking-tight">RISKSHIELD</span><span className="mono block text-[8px] uppercase tracking-[.2em] text-[#a8b4aa]">AI / OPS CONSOLE</span></span>
+        </Link>
+        <button className="rounded p-1 text-[#94a0ae] md:hidden" onClick={() => setOpen(false)} aria-label="Close navigation" data-testid="button-close-navigation"><X className="h-4 w-4" /></button>
+      </div>
+      <div className="mt-10 px-2"><span className="mono text-[9px] uppercase tracking-[.17em] text-[#8795a2]">Workspace</span></div>
+      <nav className="mt-3 space-y-1" aria-label="Primary navigation">{nav.map(({ href, label, icon: Icon }) => {
+        const active = href === '/' ? location === '/' : location.startsWith(href);
+        return <Link key={href} href={href} onClick={() => setOpen(false)} className={`group flex items-center gap-3 rounded-lg px-3 py-2.5 text-[13px] transition-colors ${active ? 'bg-[#2b3c54] text-[#f5f8e9]' : 'text-[#aeb8bd] hover:bg-[#223149] hover:text-[#f5f8e9]'}`} data-testid={`link-nav-${label.toLowerCase().replaceAll(' ', '-')}`}>
+          <Icon className={`h-4 w-4 ${active ? 'text-[#cbe85a]' : 'text-[#8e9da7]'}`} /><span className="flex-1">{label}</span>{active && <span className="h-1.5 w-1.5 rounded-full bg-[#cbe85a]" />}
+        </Link>;
+      })}</nav>
+      <div className="mt-auto space-y-3">
+        <div className="rounded-xl border border-[#34465d] bg-[#203048] p-3"><div className="flex items-center gap-2 text-[11px] font-semibold"><span className="pulse-dot h-2 w-2 rounded-full bg-[#cbe85a]" />Live decision stream</div><p className="mt-2 text-[10px] leading-relaxed text-[#9dabb2]">Scoring engine is observing production traffic.</p><div className="mono mt-2 text-[10px] text-[#cbe85a]">99.94% ONLINE</div></div>
+        <div className="flex items-center gap-2 px-2 text-[11px] text-[#93a1aa]"><CircleHelp className="h-3.5 w-3.5" /> Runbook & support <span className="ml-auto mono text-[9px]">⌘?</span></div>
+      </div>
+    </aside>
+    {open && <button className="fixed inset-0 z-40 bg-[#101827]/55 md:hidden" onClick={() => setOpen(false)} aria-label="Close navigation overlay" data-testid="button-navigation-overlay" />}
+    <main className="shell-grid min-w-0 flex-1">
+      <header className="sticky top-0 z-30 flex h-[72px] items-center justify-between border-b border-[#e2ded4] bg-[#f4f0e7]/90 px-5 backdrop-blur md:px-8">
+        <div className="flex items-center gap-3"><button className="rounded-lg border border-[#d9d8ce] p-2 md:hidden" onClick={() => setOpen(true)} aria-label="Open navigation" data-testid="button-open-navigation"><Menu className="h-4 w-4" /></button><div><div className="mono text-[9px] uppercase tracking-[.18em] text-[#7c8997]">Risk operations / {current}</div><h1 className="display mt-0.5 text-[19px] font-bold">{current}</h1></div></div>
+        <div className="flex items-center gap-2.5"><div className="hidden items-center gap-2 rounded-lg border border-[#dddcd3] bg-[#fbfaf6] px-3 py-2 text-xs text-[#778494] sm:flex"><Search className="h-3.5 w-3.5" /> Search anything <span className="mono ml-3 rounded border border-[#dddcd3] px-1.5 py-0.5 text-[9px]">⌘ K</span></div><button className="relative rounded-lg border border-[#dddcd3] bg-[#fbfaf6] p-2.5 text-[#536175]" aria-label="View alerts" data-testid="button-view-alerts"><Bell className="h-4 w-4" /><span className="absolute right-1.5 top-1.5 h-1.5 w-1.5 rounded-full bg-[#d65c50]" /></button><div className="grid h-8 w-8 place-items-center rounded-full bg-[#2b3c54] text-xs font-bold text-[#cbe85a]" data-testid="avatar-analyst">AM</div></div>
+      </header>
+      <div className="mx-auto max-w-[1440px] p-5 md:p-8">{children}</div>
+    </main>
+  </div>;
+}
+
+function Dashboard() {
+  const summary = useGetDashboardSummary(); const alerts = useGetAlerts(); const rings = useGetRings();
+  if (summary.isLoading) return <PageIntro eyebrow="Command center" title="Good morning, Alex." note="Loading your current risk posture..." content={<LoadingState rows={6} />} />;
+  if (summary.isError || !summary.data) return <PageIntro eyebrow="Command center" title="Good morning, Alex." note="Risk posture unavailable." content={<ErrorState onRetry={() => summary.refetch()} />} />;
+  const d = summary.data;
+  return <PageIntro eyebrow="Monday · 09:41 UTC" title="Good morning, Alex." note="The network is quiet. Here is what deserves your attention." content={
+    <div className="space-y-6">
+      <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4 rise">
+        <Metric label="Amount at risk" value={money(d.amountAtRisk)} detail={`${d.highRiskAlerts} high-confidence alerts`} accent="coral" trend="down" />
+        <Metric label="Net protected value" value={money(d.netProtectedValue)} detail={`${money(d.estimatedProtectedValue)} estimated total`} accent="lime" trend="up" />
+        <Metric label="Critical alerts" value={String(d.criticalAlerts)} detail="Requires analyst decision" accent="amber" />
+        <Metric label="Active abuse rings" value={String(d.activeAbuseRings)} detail="Connected clusters detected" accent="teal" />
+      </div>
+      <div className="grid gap-5 xl:grid-cols-[1.45fr_1fr]">
+        <Surface className="p-5 rise rise-1"><SectionHeading eyebrow="Posture over time" title="Risk signal, last 24 hours" note="High + critical decisions by hour" action={<span className="mono text-[10px] text-[#718094]">LIVE <span className="ml-1 inline-block h-1.5 w-1.5 rounded-full bg-[#cbe85a]" /></span>} /><Sparkline data={d.riskTrend} /><div className="mt-1 flex justify-between mono text-[9px] text-[#8a96a1]"><span>00:00</span><span>06:00</span><span>12:00</span><span>18:00</span><span>NOW</span></div></Surface>
+        <Surface className="p-5 rise rise-2"><SectionHeading eyebrow="Decision mix" title="Risk distribution" note="Share of evaluated payments" /><div className="space-y-4">{(d.riskDistribution ?? []).map((item, i) => { const share = item.value / Math.max(d.totalTransactions, 1); return <div key={item.label} data-testid={`distribution-${item.label}`}><div className="mb-1.5 flex justify-between text-xs"><span className="font-semibold">{item.label}</span><span className="mono text-[#718094]">{pct(share)}</span></div><MiniBar value={share} color={['#cbe85a', '#3fa8a3', '#e8a548', '#d65c50'][i % 4]} /></div> })}</div></Surface>
+      </div>
+      <div className="grid gap-5 xl:grid-cols-[1.2fr_.8fr]">
+        <Surface className="overflow-hidden rise rise-2"><div className="p-5 pb-3"><SectionHeading eyebrow="Attention queue" title="Recent high-signal alerts" note="The decisions with the clearest evidence" action={<Link href="/transactions" className="flex items-center gap-1 text-xs font-semibold text-[#3b7775]" data-testid="link-view-all-alerts">View monitor <ChevronRight className="h-3.5 w-3.5" /></Link>} /></div>{alerts.isLoading ? <div className="p-5"><LoadingState rows={3} /></div> : alerts.isError ? <div className="p-5"><ErrorState onRetry={() => alerts.refetch()} /></div> : !alerts.data?.length ? <div className="p-5"><EmptyState label="No critical alerts in the current window." /></div> : <div className="divide-y divide-[#ece8df]">{alerts.data.slice(0, 4).map((alert) => <AlertRow key={alert.alertId} alert={alert} />)}</div>}</Surface>
+        <Surface className="p-5 rise rise-3"><SectionHeading eyebrow="Network watch" title="Abuse rings" note="Coordinated behavior detected" action={<Link href="/rings" className="text-xs font-semibold text-[#3b7775]" data-testid="link-view-rings">Explore <ChevronRight className="inline h-3.5 w-3.5" /></Link>} />{rings.isLoading ? <LoadingState rows={3} /> : rings.isError ? <ErrorState onRetry={() => rings.refetch()} /> : !rings.data?.length ? <EmptyState label="No connected clusters detected." /> : <div className="space-y-2.5">{rings.data.slice(0, 3).map((ring) => <RingSummary key={ring.ringId} ring={ring} />)}</div>}</Surface>
+      </div>
+      <div className="grid gap-5 lg:grid-cols-3"><Surface className="p-5"><SectionHeading eyebrow="Model attribution" title="What is moving risk?" note="Top weighted contributors" />{d.topContributors?.slice(0, 4).map((item, i) => <div className="mb-4 flex items-center gap-3" key={item.label}><span className="mono w-4 text-[10px] text-[#9aa3aa]">0{i + 1}</span><span className="w-32 truncate text-xs font-semibold">{item.label}</span><MiniBar value={item.share} color={i === 0 ? '#d65c50' : '#3fa8a3'} /><span className="mono w-10 text-right text-[10px]">{pct(item.share)}</span></div>)}</Surface><Surface className="flex flex-col justify-between bg-[#203048] p-5 text-[#f1f2e8] lg:col-span-2"><div><div className="mono text-[10px] uppercase tracking-[.16em] text-[#aab8ad]">Protected with evidence</div><div className="display mt-2 max-w-lg text-[25px] font-bold leading-tight">Every decision is a trail you can replay.</div><p className="mt-2 max-w-lg text-xs leading-relaxed text-[#b4c0bf]">RiskShield keeps the model signal, network context, and analyst choice together—so a hold is never a black box.</p></div><Link href="/audit" className="mt-7 flex w-fit items-center gap-2 text-xs font-bold text-[#cbe85a]" data-testid="link-audit-trail">Review audit trail <ArrowUpRight className="h-3.5 w-3.5" /></Link></Surface></div>
+    </div>
+  } />;
+}
+function PageIntro({ eyebrow, title, note, content }: { eyebrow: string; title: string; note: string; content: ReactNode }) {
+  return <div><div className="mb-7 rise"><div className="mono text-[10px] uppercase tracking-[.18em] text-[#778594]">{eyebrow}</div><h2 className="display mt-1 text-[32px] font-bold tracking-tight md:text-[39px]">{title}</h2><p className="mt-1 text-sm text-[#6f7c8a]">{note}</p></div>{content}</div>;
+}
+function AlertRow({ alert }: { alert: Alert }) {
+  return <Link href={`/investigations/${alert.transactionId}`} className="data-row flex items-center gap-3 px-5 py-3.5" data-testid={`row-alert-${alert.alertId}`}><span className={`grid h-8 w-8 shrink-0 place-items-center rounded-lg ${levelClass(alert.riskLevel)}`}><AlertTriangle className="h-4 w-4" /></span><span className="min-w-0 flex-1"><span className="block truncate text-xs font-bold">{alert.title}</span><span className="mt-0.5 block truncate text-[11px] text-[#778494]">{alert.description}</span></span><span className="hidden text-right sm:block"><span className="mono block text-xs font-bold">{score(alert.riskScore)}</span><span className="text-[10px] text-[#8995a0]">{when(alert.timestamp)}</span></span><ChevronRight className="h-4 w-4 text-[#9da6ad]" /></Link>;
+}
+function RingSummary({ ring }: { ring: AbuseRing }) {
+  return <div className="rounded-xl border border-[#e4e1d7] p-3.5"><div className="flex items-center justify-between"><span className="mono text-[11px] font-bold">{ring.ringId}</span><StatusPill level={ring.riskLevel} /></div><div className="mt-3 flex gap-4 text-[11px] text-[#6e7b89]"><span><strong className="text-[#25324a]">{ring.connectedAccounts.length}</strong> accounts</span><span><strong className="text-[#25324a]">{ring.sharedDevices.length}</strong> devices</span><span><strong className="text-[#25324a]">{score(ring.ringRiskScore)}</strong> risk</span></div><div className="mt-3 flex gap-1.5">{[...Array(Math.min(ring.connectedAccounts.length, 8))].map((_, i) => <span key={i} className="h-1.5 flex-1 rounded-full bg-[#d65c50]" style={{ opacity: .35 + i / 16 }} />)}</div></div>;
+}
+
+function Transactions() {
+  const [search, setSearch] = useState(''); const [risk, setRisk] = useState('ALL'); const [status, setStatus] = useState('ALL');
+  const params = useMemo(() => ({ search: search || undefined, riskLevel: risk === 'ALL' ? undefined : risk as GetTransactionsRiskLevel, status: status === 'ALL' ? undefined : status as GetTransactionsStatus, limit: 100 }), [search, risk, status]);
+  const query = useGetTransactions(params); const data = query.data ?? [];
+  return <PageIntro eyebrow="Live decision stream" title="Transactions" note="Search the payment network and open any decision for an evidence-backed investigation." content={<div className="space-y-4">
+    <Surface className="p-4"><div className="flex flex-col gap-3 lg:flex-row"><label className="relative flex-1"><Search className="absolute left-3 top-2.5 h-4 w-4 text-[#87939d]" /><input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search transaction, user, merchant, IP…" className="h-9 w-full rounded-lg border border-[#d9d8ce] bg-[#f8f7f1] pl-9 pr-3 text-xs outline-none focus:border-[#3fa8a3]" data-testid="input-search-transactions" /></label><div className="flex flex-wrap items-center gap-2"><Filter className="h-4 w-4 text-[#768493]" /><select value={risk} onChange={(e) => setRisk(e.target.value)} className="h-9 rounded-lg border border-[#d9d8ce] bg-[#f8f7f1] px-3 text-xs" aria-label="Filter by risk level" data-testid="select-risk-level"><option value="ALL">All risk levels</option><option value={RiskLevel.CRITICAL}>Critical</option><option value={RiskLevel.HIGH}>High</option><option value={RiskLevel.MEDIUM}>Medium</option><option value={RiskLevel.LOW}>Low</option></select><select value={status} onChange={(e) => setStatus(e.target.value)} className="h-9 rounded-lg border border-[#d9d8ce] bg-[#f8f7f1] px-3 text-xs" aria-label="Filter by recommendation" data-testid="select-status"><option value="ALL">All recommendations</option><option value={GetTransactionsStatus.HOLD}>Hold</option><option value={GetTransactionsStatus.REVIEW}>Review</option><option value={GetTransactionsStatus.APPROVE}>Approve</option></select></div></div></Surface>
+    <Surface className="overflow-hidden"><div className="flex items-center justify-between border-b border-[#e6e3da] px-5 py-4"><div><span className="mono text-[10px] uppercase tracking-[.16em] text-[#778594]">Network feed</span><p className="mt-1 text-xs text-[#677587]">{query.isLoading ? 'Syncing…' : `${data.length} transactions in view`}</p></div><div className="flex items-center gap-2 text-[10px] text-[#718094]"><span className="pulse-dot h-1.5 w-1.5 rounded-full bg-[#3fa8a3]" />Updating live</div></div>{query.isLoading ? <div className="p-5"><LoadingState rows={7} /></div> : query.isError ? <div className="p-5"><ErrorState onRetry={() => query.refetch()} /></div> : !data.length ? <div className="p-5"><EmptyState label="No transactions match those filters." /></div> : <div className="overflow-x-auto"><table className="w-full min-w-[760px] text-left"><thead className="bg-[#f1efe7]"><tr className="mono text-[9px] uppercase tracking-[.13em] text-[#788592]"><th className="px-5 py-3 font-normal">Transaction</th><th className="px-3 py-3 font-normal">Amount</th><th className="px-3 py-3 font-normal">Context</th><th className="px-3 py-3 font-normal">Signal</th><th className="px-3 py-3 font-normal">Recommendation</th><th className="px-5 py-3 font-normal">Time</th></tr></thead><tbody className="divide-y divide-[#eeebe2]">{data.map((item) => <TransactionRow key={item.transactionId} transaction={item} />)}</tbody></table></div>}</Surface>
+  </div>} />;
+}
+function TransactionRow({ transaction: t }: { transaction: Transaction }) {
+  return <tr className="data-row cursor-pointer text-xs" data-testid={`row-transaction-${t.transactionId}`}><td className="px-5 py-4"><Link href={`/investigations/${t.transactionId}`} className="block"><span className="mono font-bold text-[#27364d]">{t.transactionId}</span><span className="mt-1 block text-[10px] text-[#778494]">{t.userId} · {t.merchantId}</span></Link></td><td className="px-3 py-4"><span className="font-bold">{money(t.amount, t.currency)}</span><span className="mt-1 block text-[10px] text-[#778494]">{t.paymentMethod ?? 'Payment card'}</span></td><td className="px-3 py-4"><span>{t.location}</span><span className="mt-1 block text-[10px] text-[#778494]">{t.isNewDevice ? 'New device' : 'Known device'} · {t.failedTransactions24h} failed / 24h</span></td><td className="px-3 py-4"><div className="flex items-center gap-2"><span className={`mono font-bold ${t.finalRiskScore > 80 ? 'text-[#bd443c]' : 'text-[#2d817e]'}`}>{score(t.finalRiskScore)}</span><span className="h-1.5 w-14 rounded-full bg-[#e6e7dd]"><span className="block h-full rounded-full bg-[#d65c50]" style={{ width: `${Math.min(t.finalRiskScore, 100)}%` }} /></span></div><span className="mt-1 block"><StatusPill level={t.riskLevel} /></span></td><td className="px-3 py-4"><span className="rounded-md bg-[#edf2df] px-2 py-1 text-[10px] font-bold text-[#49602e]">{recommendationLabel(t.recommendation)}</span></td><td className="px-5 py-4 text-[10px] text-[#778494]">{when(t.timestamp)}</td></tr>;
+}
+
+function Investigation() {
+  const { id = '' } = useParams<{ id: string }>(); const query = useGetTransaction(id, { query: { enabled: !!id, queryKey: getGetTransactionQueryKey(id) } }); const detail = query.data;
+  const [action, setAction] = useState<Recommendation | null>(null); const qc = useQueryClient();
+  const mutation = useRecordAnalystAction({ mutation: { onSuccess: () => { setAction(null); qc.invalidateQueries({ queryKey: getGetAuditQueryKey() }); qc.invalidateQueries({ queryKey: getGetTransactionQueryKey(id) }); } } });
+  if (query.isLoading) return <PageIntro eyebrow="Investigation workspace" title="Loading evidence…" note="Resolving transaction context and model attribution." content={<LoadingState rows={7} />} />;
+  if (query.isError || !detail) return <PageIntro eyebrow="Investigation workspace" title="Investigation unavailable" note="This transaction could not be resolved." content={<ErrorState onRetry={() => query.refetch()} />} />;
+  const t = detail;
+  return <PageIntro eyebrow={`Case file / ${t.transactionId}`} title="Explain the decision." note="Review the evidence, make a reversible analyst call, and leave the network safer than you found it." content={<div className="space-y-5">
+    <div className="flex flex-col justify-between gap-4 rounded-2xl bg-[#203048] p-5 text-[#f3f2e7] md:flex-row md:items-center"><div><div className="flex items-center gap-3"><StatusPill level={t.riskLevel} /><span className="mono text-[10px] text-[#aab5b5]">MODEL DECISION · {score(t.finalRiskScore)} / 100</span></div><div className="display mt-3 text-[25px] font-bold">Recommended to {recommendationLabel(t.recommendation).toLowerCase()}</div><p className="mt-1 max-w-xl text-xs leading-relaxed text-[#b8c0bd]">{t.investigationSummary}</p></div><div className="flex shrink-0 flex-wrap gap-2">{([['APPROVE', 'Approve'], ['REVIEW', 'Review'], ['HOLD', 'Hold']] as [Recommendation, string][]).map(([value, label]) => <Button key={value} variant={action === value ? 'quiet' : 'outline'} className={action !== value ? 'border-[#617287] text-[#eef0e2] hover:bg-[#31445d]' : ''} onClick={() => { setAction(value); mutation.mutate({ data: { transactionId: id, analystAction: value } }); }} disabled={mutation.isPending} data-testid={`button-action-${value.toLowerCase()}`}>{mutation.isPending && action === value ? 'Saving…' : label}</Button>)}</div></div>
+    <div className="grid gap-5 xl:grid-cols-[1.15fr_.85fr]"><div className="space-y-5"><Surface className="p-5"><SectionHeading eyebrow="Payment context" title={money(t.amount, t.currency)} note={`${t.location} · ${when(t.timestamp)}`} /><div className="grid grid-cols-2 gap-x-5 gap-y-4 sm:grid-cols-4">{[['User', t.userId], ['Merchant', t.merchantId], ['Device', t.deviceId ?? 'Unknown'], ['IP address', t.ipAddress ?? 'Unknown'], ['Account age', `${t.accountAgeDays ?? 0} days`], ['24h velocity', `${t.transactionFrequency24h ?? 0} txns`], ['Average amount', money(t.averageTransactionAmount, t.currency)], ['Payment', t.paymentMethod ?? 'Card']].map(([label, value]) => <div key={label}><div className="mono text-[9px] uppercase tracking-[.12em] text-[#8996a2]">{label}</div><div className="mt-1 truncate text-xs font-semibold">{value}</div></div>)}</div></Surface><Surface className="p-5"><SectionHeading eyebrow="Why this score" title="Evidence, not a verdict." note="The signals that moved this decision" /><div className="space-y-4">{t.riskContributors.map((item) => <div key={item.label}><div className="mb-1.5 flex items-center justify-between text-xs"><span className="font-semibold">{item.label}</span><span className="mono text-[10px] text-[#778494]">{pct(item.weight)} weight · {pct(item.value)} signal</span></div><MiniBar value={item.weight} color={item.weight > .25 ? '#d65c50' : '#3fa8a3'} /></div>)}</div><div className="mt-6 space-y-2">{t.evidence.map((evidence, i) => <div className="flex gap-3 rounded-lg bg-[#f2f1e9] p-3 text-xs leading-relaxed" key={evidence}><span className="mono shrink-0 text-[10px] text-[#3b7775]">0{i + 1}</span><span>{evidence}</span></div>)}</div></Surface></div><div className="space-y-5"><Surface className="p-5"><SectionHeading eyebrow="Model confidence" title={pct(t.confidence)} note="Confidence in the evidence-backed classification" /><div className="h-2 rounded-full bg-[#e8e8df]"><div className="h-full rounded-full bg-[#cbe85a]" style={{ width: `${(t.confidence ?? 0) * 100}%` }} /></div>{t.limitations && <div className="mt-5 rounded-lg border border-[#e5d9bb] bg-[#fff8e9] p-3 text-xs leading-relaxed text-[#765f36]"><span className="font-bold">Known limitation. </span>{t.limitations}</div>}</Surface><Surface className="p-5"><SectionHeading eyebrow="Decision history" title="Audit timeline" note="What happened before this review" />{t.auditTimeline?.length ? <div className="relative ml-2 border-l border-[#d9dcd0] pl-5">{t.auditTimeline.map((event) => <div className="relative mb-5 last:mb-0" key={event.auditId}><span className="absolute -left-[25px] top-1 h-2.5 w-2.5 rounded-full border-2 border-[#fbfaf6] bg-[#3fa8a3]" /><div className="mono text-[9px] text-[#83909a]">{when(event.timestamp)}</div><div className="mt-1 text-xs font-semibold">{event.evidenceSummary}</div><div className="mt-1 text-[10px] text-[#7b8791]">System: {recommendationLabel(event.recommendedAction)} · Analyst: {recommendationLabel(event.analystAction)}</div></div>)}</div> : <EmptyState label="No previous decisions." />}</Surface></div></div>
+  </div>} />;
+}
+
+function Rings() {
+  const query = useGetRings(); const [selected, setSelected] = useState<string | null>(null); const detail = useGetRing(selected ?? '', { query: { enabled: !!selected, queryKey: getGetRingQueryKey(selected ?? '') } });
+  return <PageIntro eyebrow="Graph intelligence" title="Abuse rings" note="Coordinated behavior is rarely one transaction. Explore the connected accounts behind the signal." content={<div className="space-y-5">
+    <div className="grid gap-3 sm:grid-cols-3"><Metric label="Clusters detected" value={String(query.data?.length ?? '—')} detail="Across the payment graph" accent="coral" /><Metric label="Accounts connected" value={String(query.data?.reduce((sum, r) => sum + r.connectedAccounts.length, 0) ?? '—')} detail="Unique identities in rings" accent="teal" /><Metric label="Avg. similarity" value={pct(query.data?.length ? query.data.reduce((sum, r) => sum + r.transactionSimilarity, 0) / query.data.length : 0)} detail="Transaction behavior match" accent="lime" /></div>
+    <Surface className="overflow-hidden"><div className="border-b border-[#e6e3da] px-5 py-4"><SectionHeading eyebrow="Connected graph" title="Detected clusters" note="Select a ring to inspect its shared infrastructure." /></div>{query.isLoading ? <div className="p-5"><LoadingState rows={5} /></div> : query.isError ? <div className="p-5"><ErrorState onRetry={() => query.refetch()} /></div> : !query.data?.length ? <div className="p-5"><EmptyState label="The graph is clear. No active abuse rings." /></div> : <div className="grid gap-3 p-5 md:grid-cols-2 xl:grid-cols-3">{query.data.map((ring) => <button className="text-left" onClick={() => setSelected(ring.ringId)} key={ring.ringId} data-testid={`button-ring-${ring.ringId}`}><RingSummary ring={ring} /></button>)}</div>}</Surface>
+    {selected && <div className="fixed inset-0 z-50 flex items-center justify-center bg-[#101827]/55 p-4" role="dialog" aria-modal="true" aria-label="Abuse ring detail" data-testid="dialog-ring-detail"><div className="w-full max-w-lg rounded-2xl bg-[#fbfaf6] p-5 shadow-2xl"><div className="flex items-start justify-between"><div><div className="mono text-[10px] uppercase tracking-[.16em] text-[#778594]">Ring detail</div><h3 className="display mt-1 text-2xl font-bold">{selected}</h3></div><button onClick={() => setSelected(null)} className="rounded-lg p-2 hover:bg-[#efeee5]" aria-label="Close ring detail" data-testid="button-close-ring"><X className="h-4 w-4" /></button></div>{detail.isLoading ? <div className="mt-5"><LoadingState rows={4} /></div> : detail.isError || !detail.data ? <div className="mt-5"><ErrorState onRetry={() => detail.refetch()} /></div> : <RingDetail ring={detail.data} />}</div></div>}
+  </div>} />;
+}
+function RingDetail({ ring }: { ring: AbuseRing }) {
+  return <div className="mt-5 space-y-4"><div className="flex items-center justify-between"><StatusPill level={ring.riskLevel} /><span className="mono text-sm font-bold">{score(ring.ringRiskScore)} risk</span></div><div className="grid grid-cols-2 gap-3">{[['Accounts', ring.connectedAccounts], ['Shared devices', ring.sharedDevices], ['Shared IPs', ring.sharedIps], ['Merchants', ring.merchantIds ?? []]].map(([label, values]) => <div className="rounded-lg bg-[#f0efe7] p-3" key={label as string}><div className="mono text-[9px] uppercase text-[#85919c]">{label as string}</div><div className="mt-2 flex flex-wrap gap-1.5">{(values as string[]).map((value) => <span className="rounded bg-[#fbfaf6] px-1.5 py-1 mono text-[9px]" key={value}>{value}</span>)}</div></div>)}</div><div className="space-y-3 rounded-lg border border-[#e2e0d6] p-3 text-xs"><div className="flex justify-between"><span>Transaction similarity</span><strong>{pct(ring.transactionSimilarity)}</strong></div><div className="flex justify-between"><span>Timing similarity</span><strong>{pct(ring.timingSimilarity)}</strong></div></div></div>;
+}
+
+function Simulator() {
+  const defaults = { amount: '480', accountAgeDays: '3', transactionFrequency24h: '7', averageTransactionAmount: '85', failedTransactions24h: '2', sharedDeviceCount: '3', sharedIpCount: '4', hourOfDay: '2', isNewDevice: true, isNewLocation: true };
+  const [form, setForm] = useState(defaults); const [analysis, setAnalysis] = useState<RiskAnalysis | null>(null); const [simulation, setSimulation] = useState<SimulationResult | null>(null);
+  const analyze = useAnalyzeRisk({ mutation: { onSuccess: (result) => setAnalysis(result) } }); const simulate = useSimulateRisk({ mutation: { onSuccess: (result) => setSimulation(result) } });
+  const payload = () => ({ amount: Number(form.amount), accountAgeDays: Number(form.accountAgeDays), transactionFrequency24h: Number(form.transactionFrequency24h), averageTransactionAmount: Number(form.averageTransactionAmount), failedTransactions24h: Number(form.failedTransactions24h), sharedDeviceCount: Number(form.sharedDeviceCount), sharedIpCount: Number(form.sharedIpCount), hourOfDay: Number(form.hourOfDay), isNewDevice: form.isNewDevice, isNewLocation: form.isNewLocation });
+  const setField = (key: keyof typeof form, value: string | boolean) => setForm((old) => ({ ...old, [key]: value }));
+  return <PageIntro eyebrow="What-if lab" title="Risk simulator" note="Change one or more inputs, see how the model responds, and keep the experiment separate from production decisions." content={<div className="grid gap-5 xl:grid-cols-[.85fr_1.15fr]">
+    <Surface className="p-5"><SectionHeading eyebrow="Scenario inputs" title="Build a case" note="Synthetic inputs only. Nothing here changes live traffic." /><div className="grid grid-cols-2 gap-3">{[['amount', 'Amount'], ['accountAgeDays', 'Account age (days)'], ['transactionFrequency24h', 'Transactions / 24h'], ['averageTransactionAmount', 'Average amount'], ['failedTransactions24h', 'Failed / 24h'], ['sharedDeviceCount', 'Shared devices'], ['sharedIpCount', 'Shared IPs'], ['hourOfDay', 'Hour of day']].map(([key, label]) => <label className="block" key={key}><span className="mono text-[9px] uppercase tracking-[.08em] text-[#788694]">{label}</span><input type="number" value={String(form[key as keyof typeof form])} onChange={(e) => setField(key as keyof typeof form, e.target.value)} className="mt-1 h-9 w-full rounded-lg border border-[#d9d8ce] bg-[#f8f7f1] px-3 text-xs outline-none focus:border-[#3fa8a3]" data-testid={`input-simulator-${key}`} /></label>)}</div><div className="mt-5 space-y-2.5 border-t border-[#e7e4db] pt-4"><label className="flex items-center gap-3 text-xs font-semibold"><input type="checkbox" checked={form.isNewDevice} onChange={(e) => setField('isNewDevice', e.target.checked)} className="h-4 w-4 accent-[#3fa8a3]" data-testid="checkbox-new-device" /> New device</label><label className="flex items-center gap-3 text-xs font-semibold"><input type="checkbox" checked={form.isNewLocation} onChange={(e) => setField('isNewLocation', e.target.checked)} className="h-4 w-4 accent-[#3fa8a3]" data-testid="checkbox-new-location" /> New location</label></div><div className="mt-6 flex flex-wrap gap-2"><Button onClick={() => { setSimulation(null); analyze.mutate({ data: payload() }); }} disabled={analyze.isPending} data-testid="button-analyze-scenario"><Sparkles className="h-3.5 w-3.5" />{analyze.isPending ? 'Analyzing…' : 'Analyze baseline'}</Button>{analysis && <Button variant="quiet" onClick={() => { setSimulation(null); simulate.mutate({ data: { ...payload(), originalRiskScore: analysis.finalRiskScore } }); }} disabled={simulate.isPending} data-testid="button-run-simulation"><Zap className="h-3.5 w-3.5" />{simulate.isPending ? 'Simulating…' : 'Run what-if'}</Button>}</div></Surface>
+    <div className="space-y-5">{analysis ? <Surface className="p-5 rise"><SectionHeading eyebrow="Baseline decision" title="Model readout" note={analysis.investigationSummary} action={<StatusPill level={analysis.riskLevel} />} /><div className="grid grid-cols-3 gap-3">{[['ML probability', analysis.mlProbability], ['Anomaly', analysis.anomalyScore], ['Graph risk', analysis.graphRisk]].map(([label, value]) => <div className="rounded-lg bg-[#f0efe7] p-3" key={label as string}><div className="mono text-[9px] uppercase text-[#87939e]">{label as string}</div><div className="display mt-1 text-xl font-bold">{pct(value as number)}</div></div>)}</div><div className="mt-4 flex gap-2 text-xs"><span className="font-semibold">Recommendation:</span><span className="rounded bg-[#edf2df] px-2 py-0.5 font-bold text-[#49602e]">{recommendationLabel(analysis.recommendation)}</span></div>{analysis.evidence?.length > 0 && <div className="mt-4 space-y-2">{analysis.evidence.slice(0, 3).map((e) => <div className="flex gap-2 text-xs text-[#627080]" key={e}><Target className="mt-0.5 h-3.5 w-3.5 shrink-0 text-[#3fa8a3]" />{e}</div>)}</div>}</Surface> : <Surface className="flex min-h-[240px] flex-col items-center justify-center p-5 text-center"><Sparkles className="h-6 w-6 text-[#3fa8a3]" /><h3 className="display mt-3 text-xl font-bold">Start with a baseline</h3><p className="mt-1 max-w-sm text-xs leading-relaxed text-[#718091]">The simulator will show the model’s reasoning before you change the inputs.</p></Surface>}{simulation && <SimulationCard result={simulation} />}</div>
+  </div>} />;
+}
+function SimulationCard({ result }: { result: SimulationResult }) {
+  const up = result.riskChange > 0; return <Surface className="bg-[#203048] p-5 text-[#f3f2e7] rise"><SectionHeading eyebrow="Simulation result" title="The decision moved." note="A reversible what-if outcome" action={<StatusPill level={result.riskLevel} />} /><div className="grid grid-cols-2 gap-4"><div><div className="mono text-[9px] uppercase text-[#aeb9b5]">Original score</div><div className="display mt-1 text-3xl font-bold">{score(result.originalRiskScore)}</div></div><div><div className="mono text-[9px] uppercase text-[#aeb9b5]">Simulated score</div><div className={`display mt-1 text-3xl font-bold ${up ? 'text-[#efaa8e]' : 'text-[#cbe85a]'}`}>{score(result.simulatedRiskScore)} <span className="text-sm">{up ? '↑' : '↓'} {Math.abs(result.riskChange).toFixed(0)}</span></div></div></div><p className="mt-5 text-xs leading-relaxed text-[#c0c7c1]">{result.explanation}</p><div className="mt-4 flex flex-wrap gap-2">{result.changedFactors.map((factor) => <span className="rounded-full bg-[#31445d] px-2.5 py-1 text-[10px] text-[#d7dfd8]" key={factor}>{factor}</span>)}</div></Surface>;
+}
+
+function Model() {
+  const query = useGetModelMetrics(); const m = query.data;
+  return <PageIntro eyebrow="Model intelligence" title="Know the instrument." note="Evaluation metrics, feature attribution, and baseline comparison for the current demo model." content={query.isLoading ? <LoadingState rows={7} /> : query.isError || !m ? <ErrorState onRetry={() => query.refetch()} /> : <div className="space-y-5">
+    <Surface className="bg-[#203048] p-5 text-[#f4f2e7]"><div className="flex flex-col justify-between gap-4 md:flex-row md:items-end"><div><div className="mono text-[10px] uppercase tracking-[.16em] text-[#aebbb1]">Production model</div><div className="display mt-1 text-3xl font-bold">{m.modelName}</div><p className="mt-2 max-w-xl text-xs text-[#b7c1be]">{m.datasetNote}</p></div><div className="mono text-xs text-[#cbe85a]">EVALUATION LOCKED <span className="ml-2 text-[#aab5b5]">/ EVALUATION SET</span></div></div></Surface>
+    <div className="grid gap-3 sm:grid-cols-4">{[['Precision', m.precision], ['Recall', m.recall], ['F1 score', m.f1], ['ROC AUC', m.rocAuc]].map(([label, value]) => <div className="metric-card rounded-2xl p-4" key={label as string}><div className="mono text-[10px] uppercase tracking-[.12em] text-[#718094]">{label as string}</div><div className="display mt-3 text-3xl font-bold">{pct(value as number)}</div><div className="mt-2 h-1.5 rounded-full bg-[#e6e7dd]"><div className="h-full rounded-full bg-[#3fa8a3]" style={{ width: `${(value as number) * 100}%` }} /></div></div>)}</div>
+    <div className="grid gap-5 lg:grid-cols-[1fr_1.1fr]"><Surface className="p-5"><SectionHeading eyebrow="Error surface" title="Confusion matrix" note="Evaluation set outcomes" /><div className="grid grid-cols-2 gap-2">{[['True positive', m.confusionMatrix.truePositive, '#dcefed'], ['False positive', m.confusionMatrix.falsePositive, '#f8ead1'], ['False negative', m.confusionMatrix.falseNegative, '#f8e2dd'], ['True negative', m.confusionMatrix.trueNegative, '#e5efc9']].map(([label, value, color]) => <div className="rounded-lg p-4" style={{ background: color as string }} key={label as string}><div className="mono text-[9px] uppercase text-[#63727c]">{label as string}</div><div className="display mt-2 text-2xl font-bold">{String(value)}</div></div>)}</div></Surface><Surface className="p-5"><SectionHeading eyebrow="Feature attribution" title="What the model sees" note="Relative importance in the current evaluation" />{m.featureImportance.map((item, i) => <div className="mb-4 flex items-center gap-3" key={item.feature}><span className="w-36 truncate text-xs font-semibold">{item.feature}</span><MiniBar value={item.importance} color={i < 2 ? '#d65c50' : '#3fa8a3'} /><span className="mono text-[10px] text-[#788592]">{pct(item.importance)}</span></div>)}</Surface></div>
+    <Surface className="p-5"><SectionHeading eyebrow="Benchmark" title="Compared with alternatives" /><div className="overflow-x-auto"><table className="w-full min-w-[440px] text-left text-xs"><thead className="mono text-[9px] uppercase text-[#788592]"><tr><th className="pb-3 font-normal">Model</th><th className="pb-3 font-normal">F1</th><th className="pb-3 font-normal">ROC AUC</th><th className="pb-3 font-normal">Position</th></tr></thead><tbody className="divide-y divide-[#e9e7de]">{m.comparison.map((row) => <tr key={row.model}><td className="py-3 font-semibold">{row.model}</td><td className="py-3 mono">{pct(row.f1)}</td><td className="py-3 mono">{pct(row.rocAuc)}</td><td className="py-3">{row.model === m.modelName ? <span className="rounded bg-[#edf2df] px-2 py-1 text-[10px] font-bold text-[#49602e]">Current</span> : <span className="text-[#7a8792]">Baseline</span>}</td></tr>)}</tbody></table></div></Surface>
+  </div>} />;
+}
+
+function Impact() {
+  const query = useGetDashboardSummary(); const d = query.data;
+  return <PageIntro eyebrow="Business impact" title="Put risk in dollars." note="A transparent view of value protected, fraud detected, and the cost of friction." content={query.isLoading ? <LoadingState rows={6} /> : query.isError || !d ? <ErrorState onRetry={() => query.refetch()} /> : <div className="space-y-5">
+    <div className="grid gap-3 md:grid-cols-3"><Metric label="Net protected value" value={money(d.netProtectedValue)} detail="After false-positive cost" accent="lime" trend="up" /><Metric label="Fraud detected" value={money(d.fraudAmountDetected)} detail="Value intercepted by model" accent="coral" /><Metric label="Friction cost" value={money(d.falsePositiveCost)} detail="Estimated good-customer impact" accent="amber" trend="down" /></div>
+    <div className="grid gap-5 lg:grid-cols-[1.05fr_.95fr]"><Surface className="p-5"><SectionHeading eyebrow="Value bridge" title="From exposure to protection" note="Current reporting window" /><div className="space-y-5">{[['Gross exposure', d.amountAtRisk, '#d65c50'], ['Fraud detected', d.fraudAmountDetected, '#e8a548'], ['Estimated protected', d.estimatedProtectedValue, '#3fa8a3'], ['Net protected', d.netProtectedValue, '#7d9c38']].map(([label, value, color]) => <div key={label as string}><div className="mb-2 flex justify-between text-xs"><span className="font-semibold">{label as string}</span><span className="mono">{money(value as number)}</span></div><div className="h-3 rounded-full bg-[#eceae1]"><div className="h-full rounded-full" style={{ width: `${Math.min(((value as number) / Math.max(d.amountAtRisk, 1)) * 100, 100)}%`, background: color as string }} /></div></div>)}</div></Surface><Surface className="p-5"><SectionHeading eyebrow="Assumptions" title="Make the math legible." note="Inputs used by the impact model" /><div className="space-y-3">{[['Payments evaluated', d.totalTransactions.toLocaleString()], ['Gross amount at risk', money(d.amountAtRisk)], ['False-positive cost', money(d.falsePositiveCost)], ['Active rings included', String(d.activeAbuseRings)]].map(([label, value]) => <div className="flex items-center justify-between border-b border-[#ebe8df] pb-3 text-xs last:border-0" key={label}><span className="text-[#6e7b89]">{label}</span><strong>{value}</strong></div>)}</div><div className="mt-4 rounded-lg bg-[#f0efe7] p-3 text-[11px] leading-relaxed text-[#6c7988]">Protected value is an estimate, not a settlement figure. Revisit assumptions when chargeback outcomes land.</div></Surface></div>
+  </div>} />;
+}
+
+function Audit() {
+  const query = useGetAudit(); const [search, setSearch] = useState(''); const items = (query.data ?? []).filter((e) => `${e.transactionId} ${e.evidenceSummary} ${e.finalStatus}`.toLowerCase().includes(search.toLowerCase()));
+  return <PageIntro eyebrow="Governance" title="Audit trail" note="A durable record of model recommendations and analyst decisions." content={<Surface className="overflow-hidden">
+    <div className="flex flex-col justify-between gap-3 border-b border-[#e6e3da] p-5 sm:flex-row sm:items-center"><div><div className="mono text-[10px] uppercase tracking-[.16em] text-[#778594]">Investigation history</div><p className="mt-1 text-xs text-[#677587]">{query.isLoading ? 'Loading events…' : `${items.length} events in view`}</p></div><label className="relative"><Search className="absolute left-3 top-2.5 h-3.5 w-3.5 text-[#87939d]" /><input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search audit events" className="h-9 w-full rounded-lg border border-[#d9d8ce] bg-[#f8f7f1] pl-9 pr-3 text-xs sm:w-64" data-testid="input-search-audit" /></label></div>{query.isLoading ? <div className="p-5"><LoadingState rows={7} /></div> : query.isError ? <div className="p-5"><ErrorState onRetry={() => query.refetch()} /></div> : !items.length ? <div className="p-5"><EmptyState label="No audit events match this search." /></div> : <div className="overflow-x-auto"><table className="w-full min-w-[720px] text-left"><thead className="bg-[#f1efe7] mono text-[9px] uppercase tracking-[.12em] text-[#788592]"><tr><th className="px-5 py-3 font-normal">Time</th><th className="px-3 py-3 font-normal">Transaction</th><th className="px-3 py-3 font-normal">Evidence</th><th className="px-3 py-3 font-normal">Model</th><th className="px-3 py-3 font-normal">Analyst</th><th className="px-5 py-3 font-normal">Status</th></tr></thead><tbody className="divide-y divide-[#eeebe2]">{items.map((event) => <AuditRow event={event} key={event.auditId} />)}</tbody></table></div>}
+  </Surface>} />;
+}
+function AuditRow({ event }: { event: AuditEvent }) {
+  return <tr className="data-row text-xs" data-testid={`row-audit-${event.auditId}`}><td className="px-5 py-4 text-[10px] text-[#778494]">{when(event.timestamp)}</td><td className="px-3 py-4"><Link href={`/investigations/${event.transactionId}`} className="mono font-bold text-[#2d7776]" data-testid={`link-audit-transaction-${event.transactionId}`}>{event.transactionId}</Link></td><td className="max-w-[290px] truncate px-3 py-4 text-[#586779]">{event.evidenceSummary}</td><td className="px-3 py-4"><div className="flex items-center gap-2"><span className="mono">{score(event.riskScore)}</span><StatusPill level={event.riskLevel} /></div></td><td className="px-3 py-4 font-semibold">{recommendationLabel(event.analystAction)}</td><td className="px-5 py-4"><span className="rounded bg-[#edf2df] px-2 py-1 text-[10px] font-bold text-[#49602e]">{event.finalStatus}</span></td></tr>;
+}
+
+function Router() {
+  return <ErrorBoundary resetKey={useLocation()[0]}><Shell><Switch><Route path="/" component={Dashboard} /><Route path="/transactions" component={Transactions} /><Route path="/investigations/:id" component={Investigation} /><Route path="/rings" component={Rings} /><Route path="/simulator" component={Simulator} /><Route path="/model" component={Model} /><Route path="/impact" component={Impact} /><Route path="/audit" component={Audit} /><Route component={NotFound} /></Switch></Shell></ErrorBoundary>;
+}
+function App() {
+  return <QueryClientProvider client={queryClient}><TooltipProvider><WouterRouter base={import.meta.env.BASE_URL.replace(/\/$/, '')}><Router /></WouterRouter><Toaster /></TooltipProvider></QueryClientProvider>;
+}
+export default App;

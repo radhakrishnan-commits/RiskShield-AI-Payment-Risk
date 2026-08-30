@@ -1,6 +1,6 @@
-# [Project name]
+# RISKSHIELD AI
 
-_Replace the heading above with the project's name, and this line with one sentence describing what this app does for users._
+An explainable payment risk intelligence command center that helps analysts investigate suspicious transactions and coordinated abuse.
 
 ## Run & Operate
 
@@ -22,23 +22,32 @@ _Replace the heading above with the project's name, and this line with one sente
 
 ## Where things live
 
-_Populate as you build — short repo map plus pointers to the source-of-truth file for DB schema, API contracts, theme files, etc._
+- `artifacts/riskshield-ai/src/App.tsx` — responsive analyst-facing command center and route views
+- `artifacts/riskshield-ai/src/index.css` — RiskShield visual tokens and motion utilities
+- `artifacts/api-server/src/risk/data.ts` — logically generated synthetic scenarios, risk fusion, evidence, metrics, and ring data
+- `artifacts/api-server/src/routes/risk.ts` — risk intelligence API routes
+- `lib/api-spec/openapi.yaml` — source of truth for the generated API client and validation schemas
+- `docs/architecture.md` — data flow and demo architecture
 
 ## Architecture decisions
 
-_Populate as you build — non-obvious choices a reader couldn't infer from the code (3-5 bullets)._
+- Risk fusion is explicit: 50% ML probability, 25% behavioral anomaly, and 25% graph connection risk.
+- Synthetic labels come from named scenarios (rings, device/location novelty, amount deviation, velocity), not random assignment.
+- Analyst recommendations are controlled to APPROVE, REVIEW, or HOLD; the API never performs irreversible payment actions.
+- Demo records are intentionally in-memory to keep the hackathon build self-contained; production would replace the store with PostgreSQL and a trained model artifact.
 
 ## Product
 
-_Describe the high-level user-facing capabilities of this app once they exist._
+The app includes a command center, transaction monitor, evidence-backed investigation workspace, abuse-ring explorer, what-if simulator, model intelligence metrics, business impact view, and audit history.
 
 ## User preferences
 
-_Populate as you build — explicit user instructions worth remembering across sessions._
+- The product should feel distinctive and production-style for a Razorpay Buildathon AI Intern submission, without exaggerating capabilities.
 
 ## Gotchas
 
-_Populate as you build — sharp edges, "always run X before Y" rules._
+- The generated API client must be regenerated after edits to `lib/api-spec/openapi.yaml`.
+- The app explicitly labels its records as synthetic demonstration data.
 
 ## Pointers
 

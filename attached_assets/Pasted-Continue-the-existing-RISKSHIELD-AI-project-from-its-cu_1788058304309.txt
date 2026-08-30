@@ -1,0 +1,88 @@
+Continue the existing RISKSHIELD AI project from its current state.
+
+IMPORTANT:
+Do NOT rebuild the project from scratch.
+Do NOT delete or replace existing working functionality.
+First inspect the entire existing codebase and understand what has already been implemented.
+
+Your immediate priority is to make the application fully runnable and fix the preview/runtime issue.
+
+Follow this exact workflow:
+
+PHASE 1 — INSPECT
+1. Inspect the complete project structure.
+2. Identify frontend, backend, ML modules, APIs, database, and configuration.
+3. Review the previous implementation work.
+4. List internally which promised features are already implemented and which are incomplete.
+5. Do not create duplicate files or duplicate implementations.
+
+PHASE 2 — FIX RUNTIME
+1. Start both backend and frontend services correctly.
+2. Check logs for errors.
+3. Fix all runtime, port, dependency, routing, CORS, and environment issues.
+4. Ensure the Replit Preview loads the actual RISKSHIELD AI application.
+5. Verify that frontend API calls reach the backend.
+
+PHASE 3 — END-TO-END VERIFICATION
+Systematically test every promised feature. Do not claim something works unless you actually verify it.
+
+Verify:
+
+1. Dashboard / Command Center
+2. Transaction table and transaction details
+3. ML fraud/risk prediction
+4. Actual model evaluation metrics
+   - Precision
+   - Recall
+   - F1 Score
+   - ROC-AUC if applicable
+   - Confusion Matrix
+5. Behavioral anomaly detection
+6. Graph-based abuse-ring detection
+7. Risk Fusion Engine
+8. Explainability / risk evidence
+9. AI Investigation Summary
+10. APPROVE / REVIEW / HOLD recommendations
+11. Investigation Workspace
+12. What-if Risk Simulator
+13. Business Impact calculations
+14. Audit Trail
+15. API endpoints
+16. Navigation between all pages
+17. Responsive UI
+
+PHASE 4 — FIX INCOMPLETE FEATURES
+For every incomplete or placeholder feature:
+- Implement real working logic where feasible.
+- Do not use fake metrics.
+- Do not show hardcoded results pretending to be calculated.
+- Clearly label synthetic demo data.
+- Ensure graph abuse rings are actually derived from relationships in the data.
+- Ensure Risk Fusion calculations are transparent.
+- Ensure AI explanations only use evidence produced by the system and do not invent facts.
+
+PHASE 5 — FINAL QUALITY CHECK
+Before stopping:
+
+1. Run the full application.
+2. Open and test the Preview.
+3. Test at least one normal transaction.
+4. Test at least one high-risk transaction.
+5. Test at least one behavioral anomaly.
+6. Test at least one abuse-ring scenario.
+7. Test the What-if Simulator.
+8. Test analyst actions and Audit Trail.
+9. Fix all visible errors.
+10. Ensure there are no broken pages or dead buttons.
+
+Finally, give me a concise implementation report containing:
+
+- What is fully implemented
+- What was fixed
+- What remains limited
+- How to run the project
+- The main demo scenarios I should use
+
+IMPORTANT:
+Prioritize a fully working, demonstrable end-to-end application over adding unnecessary new features.
+Do not stop at code generation. Actually run, test, debug, and verify the application.

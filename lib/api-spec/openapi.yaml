@@ -3,13 +3,15 @@ info:
   # Do not change the title, if the title changes, the import paths will be broken
   title: Api
   version: 0.1.0
-  description: API specification
+  description: RiskShield AI payment risk intelligence API
 servers:
   - url: /api
     description: Base API path
 tags:
   - name: health
     description: Health operations
+  - name: risk
+    description: Payment risk intelligence operations
 paths:
   /healthz:
     get:
@@ -24,6 +26,191 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/HealthStatus"
+  /dashboard/summary:
+    get:
+      operationId: getDashboardSummary
+      tags: [risk]
+      summary: Get command center summary
+      responses:
+        "200":
+          description: Dashboard summary
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DashboardSummary"
+  /transactions:
+    get:
+      operationId: getTransactions
+      tags: [risk]
+      summary: Search and filter transactions
+      parameters:
+        - name: search
+          in: query
+          required: false
+          schema: { type: string }
+        - name: riskLevel
+          in: query
+          required: false
+          schema: { type: string, enum: [LOW, MEDIUM, HIGH, CRITICAL] }
+        - name: status
+          in: query
+          required: false
+          schema: { type: string, enum: [APPROVE, REVIEW, HOLD] }
+        - name: limit
+          in: query
+          required: false
+          schema: { type: number, minimum: 1, maximum: 100, default: 50 }
+      responses:
+        "200":
+          description: Transactions
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/Transaction" }
+  /transactions/{transactionId}:
+    get:
+      operationId: getTransaction
+      tags: [risk]
+      summary: Get transaction investigation detail
+      parameters:
+        - name: transactionId
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          description: Transaction detail
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TransactionDetail"
+        "404":
+          description: Transaction not found
+  /alerts:
+    get:
+      operationId: getAlerts
+      tags: [risk]
+      summary: Get recent critical alerts
+      responses:
+        "200":
+          description: Alerts
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/Alert" }
+  /rings:
+    get:
+      operationId: getRings
+      tags: [risk]
+      summary: Get detected abuse rings
+      responses:
+        "200":
+          description: Abuse rings
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/AbuseRing" }
+  /rings/{ringId}:
+    get:
+      operationId: getRing
+      tags: [risk]
+      summary: Get abuse ring detail
+      parameters:
+        - name: ringId
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          description: Abuse ring
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AbuseRing"
+        "404":
+          description: Abuse ring not found
+  /model/metrics:
+    get:
+      operationId: getModelMetrics
+      tags: [risk]
+      summary: Get held-out model evaluation metrics
+      responses:
+        "200":
+          description: Model metrics
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ModelMetrics"
+  /risk/analyze:
+    post:
+      operationId: analyzeRisk
+      tags: [risk]
+      summary: Analyze a payment risk payload
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RiskAnalysisInput"
+      responses:
+        "200":
+          description: Risk analysis
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RiskAnalysis"
+  /simulate:
+    post:
+      operationId: simulateRisk
+      tags: [risk]
+      summary: Run a clearly labelled what-if risk simulation
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SimulationInput"
+      responses:
+        "200":
+          description: Simulation result
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SimulationResult"
+  /audit:
+    get:
+      operationId: getAudit
+      tags: [risk]
+      summary: Get investigation audit history
+      responses:
+        "200":
+          description: Audit events
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/AuditEvent" }
+  /audit/action:
+    post:
+      operationId: recordAnalystAction
+      tags: [risk]
+      summary: Record an analyst decision in the audit trail
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AnalystActionInput"
+      responses:
+        "201":
+          description: Audit event recorded
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AuditEvent"
 components:
   schemas:
     HealthStatus:
@@ -33,4 +220,239 @@ components:
           type: string
       required:
         - status
+    RiskLevel:
+      type: string
+      enum: [LOW, MEDIUM, HIGH, CRITICAL]
+    Recommendation:
+      type: string
+      enum: [APPROVE, REVIEW, HOLD]
+    Transaction:
+      type: object
+      required: [transactionId, userId, merchantId, amount, currency, timestamp, location, mlProbability, anomalyScore, graphRisk, finalRiskScore, riskLevel, recommendation, isNewDevice, isNewLocation, failedTransactions24h]
+      properties:
+        transactionId: { type: string }
+        userId: { type: string }
+        merchantId: { type: string }
+        amount: { type: number }
+        currency: { type: string }
+        timestamp: { type: string }
+        location: { type: string }
+        country: { type: string }
+        deviceId: { type: string }
+        ipAddress: { type: string }
+        paymentMethod: { type: string }
+        accountAgeDays: { type: number }
+        transactionFrequency24h: { type: number }
+        averageTransactionAmount: { type: number }
+        failedTransactions24h: { type: number }
+        isNewDevice: { type: boolean }
+        isNewLocation: { type: boolean }
+        hourOfDay: { type: number }
+        sharedDeviceCount: { type: number }
+        sharedIpCount: { type: number }
+        transactionStatus: { type: string }
+        isFraud: { type: boolean }
+        mlProbability: { type: number }
+        anomalyScore: { type: number }
+        graphRisk: { type: number }
+        finalRiskScore: { type: number }
+        riskLevel: { $ref: "#/components/schemas/RiskLevel" }
+        recommendation: { $ref: "#/components/schemas/Recommendation" }
+    TransactionDetail:
+      allOf:
+        - $ref: "#/components/schemas/Transaction"
+        - type: object
+          required: [riskContributors, evidence, investigationSummary, auditTimeline]
+          properties:
+            riskContributors:
+              type: array
+              items: { $ref: "#/components/schemas/RiskContributor" }
+            evidence:
+              type: array
+              items: { type: string }
+            investigationSummary: { type: string }
+            confidence: { type: number }
+            limitations: { type: string }
+            auditTimeline:
+              type: array
+              items: { $ref: "#/components/schemas/AuditEvent" }
+    RiskContributor:
+      type: object
+      required: [label, value, weight]
+      properties:
+        label: { type: string }
+        value: { type: number }
+        weight: { type: number }
+    Alert:
+      type: object
+      required: [alertId, transactionId, title, description, riskScore, riskLevel, timestamp]
+      properties:
+        alertId: { type: string }
+        transactionId: { type: string }
+        title: { type: string }
+        description: { type: string }
+        riskScore: { type: number }
+        riskLevel: { $ref: "#/components/schemas/RiskLevel" }
+        timestamp: { type: string }
+    AbuseRing:
+      type: object
+      required: [ringId, connectedAccounts, sharedDevices, sharedIps, transactionSimilarity, timingSimilarity, ringRiskScore, riskLevel]
+      properties:
+        ringId: { type: string }
+        connectedAccounts:
+          type: array
+          items: { type: string }
+        sharedDevices:
+          type: array
+          items: { type: string }
+        sharedIps:
+          type: array
+          items: { type: string }
+        merchantIds:
+          type: array
+          items: { type: string }
+        transactionSimilarity: { type: number }
+        timingSimilarity: { type: number }
+        ringRiskScore: { type: number }
+        riskLevel: { $ref: "#/components/schemas/RiskLevel" }
+    DashboardSummary:
+      type: object
+      required: [totalTransactions, highRiskAlerts, criticalAlerts, amountAtRisk, activeAbuseRings, netProtectedValue, fraudAmountDetected, estimatedProtectedValue, falsePositiveCost, riskTrend, riskDistribution, topContributors]
+      properties:
+        totalTransactions: { type: number }
+        highRiskAlerts: { type: number }
+        criticalAlerts: { type: number }
+        amountAtRisk: { type: number }
+        activeAbuseRings: { type: number }
+        netProtectedValue: { type: number }
+        fraudAmountDetected: { type: number }
+        estimatedProtectedValue: { type: number }
+        falsePositiveCost: { type: number }
+        riskTrend:
+          type: array
+          items:
+            type: object
+            required: [label, high, critical]
+            properties:
+              label: { type: string }
+              high: { type: number }
+              critical: { type: number }
+        riskDistribution:
+          type: array
+          items:
+            type: object
+            required: [label, value]
+            properties:
+              label: { type: string }
+              value: { type: number }
+        topContributors:
+          type: array
+          items:
+            type: object
+            required: [label, count, share]
+            properties:
+              label: { type: string }
+              count: { type: number }
+              share: { type: number }
+    ModelMetrics:
+      type: object
+      required: [modelName, datasetNote, precision, recall, f1, rocAuc, confusionMatrix, featureImportance, comparison]
+      properties:
+        modelName: { type: string }
+        datasetNote: { type: string }
+        precision: { type: number }
+        recall: { type: number }
+        f1: { type: number }
+        rocAuc: { type: number }
+        confusionMatrix:
+          type: object
+          required: [truePositive, trueNegative, falsePositive, falseNegative]
+          properties:
+            truePositive: { type: number }
+            trueNegative: { type: number }
+            falsePositive: { type: number }
+            falseNegative: { type: number }
+        featureImportance:
+          type: array
+          items:
+            type: object
+            required: [feature, importance]
+            properties:
+              feature: { type: string }
+              importance: { type: number }
+        comparison:
+          type: array
+          items:
+            type: object
+            required: [model, f1, rocAuc]
+            properties:
+              model: { type: string }
+              f1: { type: number }
+              rocAuc: { type: number }
+    RiskAnalysisInput:
+      type: object
+      required: [amount, accountAgeDays, transactionFrequency24h, averageTransactionAmount, failedTransactions24h, isNewDevice, isNewLocation, sharedDeviceCount, sharedIpCount]
+      properties:
+        amount: { type: number }
+        accountAgeDays: { type: number }
+        transactionFrequency24h: { type: number }
+        averageTransactionAmount: { type: number }
+        failedTransactions24h: { type: number }
+        isNewDevice: { type: boolean }
+        isNewLocation: { type: boolean }
+        sharedDeviceCount: { type: number }
+        sharedIpCount: { type: number }
+        hourOfDay: { type: number, default: 14 }
+    RiskAnalysis:
+      type: object
+      required: [mlProbability, anomalyScore, graphRisk, finalRiskScore, riskLevel, recommendation, evidence, investigationSummary]
+      properties:
+        mlProbability: { type: number }
+        anomalyScore: { type: number }
+        graphRisk: { type: number }
+        finalRiskScore: { type: number }
+        riskLevel: { $ref: "#/components/schemas/RiskLevel" }
+        recommendation: { $ref: "#/components/schemas/Recommendation" }
+        evidence:
+          type: array
+          items: { type: string }
+        investigationSummary: { type: string }
+    SimulationInput:
+      allOf:
+        - $ref: "#/components/schemas/RiskAnalysisInput"
+        - type: object
+          required: [originalRiskScore]
+          properties:
+            originalRiskScore: { type: number }
+    SimulationResult:
+      type: object
+      required: [originalRiskScore, simulatedRiskScore, riskChange, riskLevel, changedFactors, explanation]
+      properties:
+        originalRiskScore: { type: number }
+        simulatedRiskScore: { type: number }
+        riskChange: { type: number }
+        riskLevel: { $ref: "#/components/schemas/RiskLevel" }
+        changedFactors:
+          type: array
+          items: { type: string }
+        explanation: { type: string }
+    AnalystActionInput:
+      type: object
+      required: [transactionId, analystAction]
+      properties:
+        transactionId: { type: string }
+        analystAction: { $ref: "#/components/schemas/Recommendation" }
+    AuditEvent:
+      type: object
+      required: [auditId, timestamp, transactionId, riskScore, riskLevel, evidenceSummary, recommendedAction, analystAction, finalStatus]
+      properties:
+        auditId: { type: string }
+        timestamp: { type: string }
+        transactionId: { type: string }
+        riskScore: { type: number }
+        riskLevel: { $ref: "#/components/schemas/RiskLevel" }
+        evidenceSummary: { type: string }
+        recommendedAction: { $ref: "#/components/schemas/Recommendation" }
+        analystAction: { $ref: "#/components/schemas/Recommendation" }
+        finalStatus: { type: string }
 
